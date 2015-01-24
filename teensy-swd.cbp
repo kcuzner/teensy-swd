@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+<CodeBlocks_project_file>
+	<FileVersion major="1" minor="6" />
+	<Project>
+		<Option title="scope-teensy" />
+		<Option makefile_is_custom="1" />
+		<Option pch_mode="2" />
+		<Option compiler="arm-elf-gcc" />
+		<Build>
+			<Target title="Build">
+				<Option output="bin/scope-teensy" prefix_auto="1" extension_auto="1" />
+				<Option object_output="obj/Debug/" />
+				<Option type="1" />
+				<Option compiler="arm-elf-gcc" />
+				<Compiler>
+					<Add option="-g" />
+				</Compiler>
+			</Target>
+		</Build>
+		<Compiler>
+			<Add option="-mthumb" />
+			<Add option="-Wall" />
+			<Add option="-mcpu=cortex-m4 -fno-common" />
+			<Add directory="include" />
+		</Compiler>
+		<Linker>
+			<Add option="-nostartfiles -Tcommon/Teensy31_flash.ld" />
+		</Linker>
+		<Unit filename="common/Teensy31_flash.ld" />
+		<Unit filename="common/arm_cm4.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="common/crt0.s" />
+		<Unit filename="common/sysinit.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="include/MK20D7.h" />
+		<Unit filename="include/adc.h" />
+		<Unit filename="include/arm_cm4.h" />
+		<Unit filename="include/common.h" />
+		<Unit filename="include/mcg.h" />
+		<Unit filename="include/pwm.h" />
+		<Unit filename="include/start.h" />
+		<Unit filename="include/startup.h" />
+		<Unit filename="include/sysinit.h" />
+		<Unit filename="include/term_io.h" />
+		<Unit filename="include/uart.h" />
+		<Unit filename="include/usb.h" />
+		<Unit filename="include/wdog.h" />
+		<Unit filename="src/adc.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="src/main.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="src/pwm.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="src/usb.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Extensions>
+			<envvars />
+			<code_completion />
+			<lib_finder disable_auto="1" />
+			<debugger />
+		</Extensions>
+	</Project>
+</CodeBlocks_project_file>
