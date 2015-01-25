@@ -138,7 +138,7 @@ static dev_descriptor_t dev_descriptor = {
     .idProduct = 0x05dc,
     .bcdDevice = 0x0001,
     .iManufacturer = 1,
-    .iProduct = 0,
+    .iProduct = 2,
     .iSerialNumber = 0,
     .bNumConfigurations = 1
 };
@@ -178,16 +178,23 @@ static str_descriptor_t lang_descriptor = {
 };
 
 static str_descriptor_t manuf_descriptor = {
-    .bLength = 2 + 4 * 2,
+    .bLength = 2 + 15 * 2,
     .bDescriptorType = 3,
-    .wString = {'a','s','d','f'}
+    .wString = {'k','e','v','i', 'n', 'c', 'u', 'z', 'n', 'e', 'r', '.', 'c', 'o', 'm'}
+};
+
+static str_descriptor_t product_descriptor = {
+    .bLength = 2 + 11 * 2,
+    .bDescriptorType = 3,
+    .wString = {'S', 'W', 'D', ' ', 'A', 'd', 'a', 'p', 't', 'o', 'r'}
 };
 
 static const descriptor_entry_t descriptors[] = {
     { 0x0100, 0x0000, &dev_descriptor, sizeof(dev_descriptor) },
     { 0x0200, 0x0000, &cfg_descriptor, 18 },
     { 0x0300, 0x0000, &lang_descriptor, 4 },
-    { 0x0301, 0x0409, &manuf_descriptor, 10 },
+    { 0x0301, 0x0409, &manuf_descriptor, 32 },
+    { 0x0302, 0x0409, &product_descriptor, 24 },
     { 0x0000, 0x0000, NULL, 0 }
 };
 
@@ -209,6 +216,7 @@ static void usb_endp0_handle_setup(setup_t* packet)
     const descriptor_entry_t* entry;
     const uint8_t* data = NULL;
     uint8_t data_length = 0;
+    static int t = 4;
 
 
     switch(packet->wRequestAndType)
@@ -234,6 +242,18 @@ static void usb_endp0_handle_setup(setup_t* packet)
             }
         }
         goto stall;
+        break;
+    case 0x1000: //Turn LED on
+        GPIOC_PSOR=(1<<5);
+        break;
+    case 0x1100: //turn LED off
+        GPIOC_PCOR=(1<<5);
+        break;
+    case 0x1282: //read i
+        t++;
+        data = (void*)(&t);
+        data_length = sizeof(t);
+        goto send;
         break;
     default:
         goto stall;
@@ -288,7 +308,7 @@ void usb_endp0_handler(uint8_t stat)
         }
         break;
     case PID_OUT:
-        //nothing to do here..just give the buffer back
+        //give the buffer back
         bdt->desc = BDT_DESC(ENDP0_SIZE, 1);
         break;
     case PID_SOF:

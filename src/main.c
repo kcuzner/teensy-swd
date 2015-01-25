@@ -1,8 +1,7 @@
 #include "common.h"
 #include "arm_cm4.h"
-#include "adc.h"
 #include "usb.h"
-#include "pwm.h"
+#include "swd.h"
 
 #define LED_ON  GPIOC_PSOR=(1<<5)
 #define LED_OFF GPIOC_PCOR=(1<<5)
@@ -39,10 +38,8 @@ int main(void)
     PIT_TCTRL1 = PIT_TCTRL_TIE_MASK; // enable Timer 1 interrupts
     PIT_TCTRL1 |= PIT_TCTRL_TEN_MASK; // start Timer 1
 
-    adc_init(8);
     usb_init();
-    pwm_init(1000);
-    pwm_set(0, 500);
+    swd_init();
 
     enable_irq(IRQ(INT_PIT1));
     EnableInterrupts
