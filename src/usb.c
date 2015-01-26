@@ -1,5 +1,6 @@
 #include "usb.h"
 #include "arm_cm4.h"
+#include "swd.h"
 
 #define PID_OUT   0x1
 #define PID_IN    0x9
@@ -20,6 +21,22 @@ typedef struct {
     uint16_t wIndex;
     uint16_t wLength;
 } setup_t;
+
+typedef struct {
+    uint8_t req;
+} swd_read_t;
+
+typedef struct {
+    uint8_t req;
+    uint32_t data;
+} swd_write_t;
+
+typedef struct {
+    int8_t result; //result of last swd library call
+    uint8_t busy; //current swd busy status
+    int8_t response; //only valid when busy == 0
+    uint32_t data; //only valid when busy == 0
+} swd_status_t;
 
 typedef struct {
     uint8_t bLength;
@@ -208,6 +225,9 @@ static void usb_endp0_transmit(const void* data, uint8_t length)
     endp0_data ^= 1;
 }
 
+//current swd status
+static swd_status_t status;
+
 /**
  * Endpoint 0 setup handler
  */
@@ -249,10 +269,27 @@ static void usb_endp0_handle_setup(setup_t* packet)
     case 0x1100: //turn LED off
         GPIOC_PCOR=(1<<5);
         break;
+    case 0x2000: //begin init swd
+        status.result = swd_begin_init();
+        break;
+    case 0x2100: //begin read swd
+        //wait for IN packet
+        break;
+    case 0x2200: //begin write swd
+        //wait for IN packet
+        break;
     case 0x1282: //read i
         t++;
         data = (void*)(&t);
         data_length = sizeof(t);
+        goto send;
+        break;
+    case 0x2082: //read swd status
+        status.busy = swd_is_busy();
+        swd_get_last_response(&status.response);
+        swd_get_last_read(&status.data);
+        data = (void*)(&status);
+        data_length  = sizeof(status);
         goto send;
         break;
     default:
@@ -276,6 +313,8 @@ static void usb_endp0_handle_setup(setup_t* packet)
  */
 void usb_endp0_handler(uint8_t stat)
 {
+    swd_read_t read_req;
+    swd_write_t write_req;
     static setup_t last_setup;
 
     //determine which bdt we are looking at here
@@ -302,9 +341,19 @@ void usb_endp0_handler(uint8_t stat)
         USB0_CTL = USB_CTL_USBENSOFEN_MASK;
         break;
     case PID_IN:
-        if (last_setup.wRequestAndType == 0x0500)
+        switch (last_setup.wRequestAndType)
         {
+        case 0x500:
             USB0_ADDR = last_setup.wValue;
+            break;
+        case 0x2100: //begin swd read
+            read_req = *((swd_read_t*)(bdt->addr));
+            status.result = swd_begin_read(read_req.req);
+            break;
+        case 0x2200: //begin swd write
+            write_req = *((swd_write_t*)(bdt->addr));
+            status.result = swd_begin_write(write_req.req, write_req.data);
+            break;
         }
         break;
     case PID_OUT:
