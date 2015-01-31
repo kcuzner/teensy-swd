@@ -77,6 +77,7 @@ void swd_init(void)
     SWD_DATA_MODE;
 
     //data is input for the moment
+    SWD_CLK_OUT;
     SWD_DATA_IN;
 
     //set up ftm0 to generate 50% pwm at a relatively high frequency
@@ -85,7 +86,7 @@ void swd_init(void)
     FTM0_SC = 0;
     FTM0_CNTIN = 0;
     FTM0_CNT = 0;
-    FTM0_MOD = 32767;
+    FTM0_MOD = 1024;
     FTM0_C0SC = FTM_CnSC_MSB_MASK | FTM_CnSC_ELSB_MASK;
     FTM0_C0V = FTM0_MOD / 2; //50% duty cycle
 
@@ -146,7 +147,6 @@ void FTM0_IRQHandler(void)
     {
         //clock is now high
         SWD_CLK_HIGH;
-        GPIOC_PSOR=(1<<5);
 
         //clear the interrupt flag
         FTM0_SC &= ~FTM_SC_TOF_MASK;
@@ -155,7 +155,6 @@ void FTM0_IRQHandler(void)
     {
         //clock is now low
         SWD_CLK_LOW;
-        GPIOC_PCOR=(1<<5);
 
         //handle the current command
         swd_handle_current_command();
@@ -183,7 +182,7 @@ static void swd_start_bus(uint8_t data_state)
     FTM0_CNT = 0;
     //run the clock (system clock, prescaler 1)
     //enable the ftm0 overflow so we can reset the clock
-    FTM0_SC = FTM_SC_TOIE_MASK | FTM_SC_CLKS(1) | FTM_SC_PS(7);
+    FTM0_SC = FTM_SC_TOIE_MASK | FTM_SC_CLKS(1) | FTM_SC_PS(0);
 }
 
 static void swd_idle_bus(void)
