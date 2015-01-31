@@ -4,6 +4,8 @@
 No, this isn't using SWD on a Teensy 3.1 (which would be nice)...it's making
 the Teensy into a SWD dongle!
 
+**NOTE: This project is in progress**
+
 ### Why?
 
 So, I have a chicken-and-the-egg problem. I assembled one of my [kl2-dev board]
