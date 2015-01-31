@@ -2,7 +2,7 @@
 <CodeBlocks_project_file>
 	<FileVersion major="1" minor="6" />
 	<Project>
-		<Option title="scope-teensy" />
+		<Option title="teensy-swd" />
 		<Option makefile_is_custom="1" />
 		<Option pch_mode="2" />
 		<Option compiler="arm-elf-gcc" />
@@ -47,6 +47,9 @@
 		<Unit filename="include/usb.h" />
 		<Unit filename="include/wdog.h" />
 		<Unit filename="src/main.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="src/swd.c">
 			<Option compilerVar="CC" />
 		</Unit>
 		<Unit filename="src/usb.c">
