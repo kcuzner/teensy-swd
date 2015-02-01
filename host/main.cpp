@@ -58,6 +58,11 @@ int main()
                 std::cout << "Unknown register: \"" << reg << "\"" << std::endl;
             }
         }
+        else if (command == "init")
+        {
+            std::cout << "Initializing programmer" << std::endl;
+            pgm->init();
+        }
         else
         {
             std::cout << "Unknown command \"" << command << "\"" << std::endl;

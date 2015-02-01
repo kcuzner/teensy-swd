@@ -76,6 +76,11 @@ Programmer::~Programmer()
     libusb_exit(this->context);
 }
 
+void Programmer::init(void)
+{
+    libusb_control_transfer(this->dev, 0x00, 0x20, 0x00, 0x00, 0, 0, 250);
+}
+
 void Programmer::setLed(bool on)
 {
     if (on)

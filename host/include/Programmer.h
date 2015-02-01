@@ -14,6 +14,7 @@ class Programmer
 
         virtual ~Programmer();
 
+        void init(void);
         void setLed(bool on);
         int readT(void);
     protected:
