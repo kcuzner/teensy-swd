@@ -30,10 +30,15 @@
 #define SWD_WRITE_STATE_PARITY (SWD_WRITE_STATE_DATA + 1)
 #define SWD_WRITE_STATE_FINISH (SWD_WRITE_STATE_PARITY + 8)
 
+#define NEXT(I) (I + 1)
+#define PREV(I) (I - 1)
+#define NEXT_INDEX(S, I) (I >= (S) ? 0 : NEXT(I))
+
 typedef enum { SWD_INIT, SWD_READ, SWD_WRITE, SWD_IDLE } cmd_type_t;
 
 typedef struct {
     cmd_type_t command;
+    swd_result_t* result; //written with the result of the command
     uint8_t request;
     uint32_t data;
     uint32_t state; //written by interrupt when swd_busy = TRUE
@@ -45,10 +50,16 @@ static uint8_t swd_busy = FALSE;
 //written only by the interface routines when swd_busy is FALSE
 static cmd_t current_command;
 
-//written only by the interrupt
-static int8_t last_response;
-//written only by the interrupt
-static uint32_t last_read_data;
+static cmd_t cmd_queue[SWD_QUEUE_LENGTH];
+static uint32_t cmd_in = 0;
+static uint32_t cmd_out = 0;
+
+static uint8_t swd_queue_empty(void);
+static uint8_t swd_queue_full(void);
+static uint8_t swd_queue_cmd(const cmd_t* cmd);
+static uint8_t swd_dequeue_cmd(cmd_t* dest);
+
+static cmd_t current_command;
 
 /**
  * Starts the SWD bus
@@ -102,7 +113,7 @@ int8_t swd_is_busy(void)
     return swd_busy;
 }
 
-int8_t swd_begin_init(void)
+int8_t swd_begin_init(swd_result_t* res)
 {
     if (swd_is_busy())
         return SWD_ERR_BUSY;
@@ -119,25 +130,13 @@ int8_t swd_begin_init(void)
     return SWD_OK;
 }
 
-int8_t swd_begin_write(uint8_t req, uint32_t data)
+int8_t swd_begin_write(uint8_t req, uint32_t data, swd_result_t* res)
 {
     return SWD_OK;
 }
 
-int8_t swd_begin_read(uint8_t req)
+int8_t swd_begin_read(uint8_t req, swd_result_t* res)
 {
-    return SWD_OK;
-}
-
-int8_t swd_get_last_response(int8_t* dest)
-{
-    *dest = last_response;
-    return SWD_OK;
-}
-
-int8_t swd_get_last_read(uint32_t* dest)
-{
-    *dest = last_read_data;
     return SWD_OK;
 }
 
@@ -162,6 +161,38 @@ void FTM0_IRQHandler(void)
         //clear the interrupt flag
         FTM0_C0SC &= ~FTM_CnSC_CHF_MASK;
     }
+}
+
+static uint8_t swd_queue_empty(void)
+{
+    return cmd_in == cmd_out;
+}
+
+static uint8_t swd_queue_full(void)
+{
+    return NEXT_INDEX(SWD_QUEUE_LENGTH - 1, cmd_in) == cmd_out;
+}
+
+static uint8_t swd_queue_cmd(const cmd_t* cmd)
+{
+    if (swd_queue_full())
+        return SWD_ERR;
+
+    cmd_queue[cmd_in] = *cmd;
+    cmd_in = NEXT_INDEX(SWD_QUEUE_LENGTH - 1,cmd_in);
+
+    return SWD_OK;
+}
+
+static uint8_t swd_dequeue_cmd(cmd_t* dest)
+{
+    if (swd_queue_empty())
+        return SWD_ERR;
+
+    *dest = cmd_queue[cmd_out];
+    cmd_out = NEXT_INDEX(SWD_QUEUE_LENGTH - 1, cmd_out);
+
+    return SWD_OK;
 }
 
 static void swd_start_bus(uint8_t data_state)
