@@ -76,12 +76,6 @@ typedef struct {
 void swd_init(void);
 
 /**
- * Returns TRUE if the swd interface is busy
- * @return SWD_OK or an error code
- */
-int8_t swd_is_busy(void);
-
-/**
  * Begins a bus init sequence, including mode switch from JTAG
  */
 int8_t swd_begin_init(swd_result_t* res);

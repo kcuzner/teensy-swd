@@ -2,6 +2,23 @@
  * Serial wire debug interface
  */
 
+/**
+ * How this works:
+ * Calling swd_init sets up the FTM to generate interrupts on timer overflow
+ * and on channel 1 match. Channel 1 is set up to match on FTM_MOD/2. The bus
+ * state variable is set to SWD_BUS_IDLE. The data is set to input and floats
+ * high. The clock is set to output and held high
+ *
+ * During the overflow interrupt, if the bus state is not SWD_BUS_IDLE, the
+ * clock will be brought high. In addition, the handle_queue function will be
+ * called always.
+ *
+ * During the match interrupt, if the bus state is not SWD_BUS_IDLE, the clock
+ * will be brought low.
+ *
+ * The handle_queue function
+ */
+
 #include "arm_cm4.h"
 #include "swd.h"
 
@@ -43,9 +60,6 @@ typedef struct {
     uint32_t data;
     uint32_t state; //written by interrupt when swd_busy = TRUE
 } cmd_t;
-
-//written only by the interrupt routine
-static uint8_t swd_busy = FALSE;
 
 //written only by the interface routines when swd_busy is FALSE
 static cmd_t current_command;
@@ -108,24 +122,14 @@ void swd_init(void)
     swd_idle_bus();
 }
 
-int8_t swd_is_busy(void)
-{
-    return swd_busy;
-}
-
 int8_t swd_begin_init(swd_result_t* res)
 {
-    if (swd_is_busy())
-        return SWD_ERR_BUSY;
-
     cmd_t command = {
-        .command = SWD_INIT
+        .command = SWD_INIT,
+        .result = res
     };
 
-    current_command = command;
-
-    //start the command
-    swd_handle_current_command();
+    return swd_queue_cmd(&command);
 
     return SWD_OK;
 }
