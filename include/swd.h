@@ -63,7 +63,7 @@ typedef struct {
     /*
      * Written by the SWD module to the result of the command once it is completed, before done is written
      */
-    uint8_t result;
+    int8_t result;
     /*
      * Written by the SWD module to the read data for this command once it is completed, before done is written
      */
@@ -74,11 +74,6 @@ typedef struct {
  * Initializes the Serial Wire Debug driver using FTM0
  */
 void swd_init(void);
-
-/**
- * Begins a bus init sequence, including mode switch from JTAG
- */
-int8_t swd_begin_init(swd_result_t* res);
 
 /**
  * Begins a write sequence
