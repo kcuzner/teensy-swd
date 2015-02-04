@@ -37,6 +37,7 @@
 		<Linker>
 			<Add library="libusb-1.0" />
 		</Linker>
+		<Unit filename="../shared/usb_types.h" />
 		<Unit filename="include/Programmer.h" />
 		<Unit filename="main.cpp" />
 		<Unit filename="src/Programmer.cpp" />

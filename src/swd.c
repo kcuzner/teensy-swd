@@ -65,6 +65,8 @@ typedef struct {
     uint32_t state_data;
 } cmd_t;
 
+static bus_state_t state = SWD_BUS_IDLE;
+
 static cmd_t cmd_queue[SWD_QUEUE_LENGTH];
 static uint32_t cmd_in = 0;
 static uint32_t cmd_out = 0;
@@ -187,8 +189,11 @@ void FTM0_IRQHandler(void)
 {
     if (FTM0_SC & FTM_SC_TOF_MASK)
     {
-        //clock is now high
-        SWD_CLK_HIGH;
+        if (state != SWD_BUS_IDLE)
+        {
+            //clock is now high
+            SWD_CLK_HIGH;
+        }
 
         //do our bus things while the target isn't listening
         swd_do_bus();
@@ -198,8 +203,11 @@ void FTM0_IRQHandler(void)
     }
     else if (FTM0_C0SC & FTM_CnSC_CHF_MASK)
     {
-        //clock is now low
-        SWD_CLK_LOW;
+        if (state != SWD_BUS_IDLE)
+        {
+            //clock is now low
+            SWD_CLK_LOW;
+        }
 
         //clear the interrupt flag
         FTM0_C0SC &= ~FTM_CnSC_CHF_MASK;
@@ -244,7 +252,6 @@ static int8_t swd_dequeue_cmd(cmd_t* dest)
 
 static void swd_do_bus(void)
 {
-    static bus_state_t state = SWD_BUS_IDLE;
     static uint32_t counter = 0; //generic counter for the state
     static cmd_t current_command;
 

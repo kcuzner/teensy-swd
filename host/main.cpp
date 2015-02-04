@@ -33,35 +33,20 @@ int main()
             ls >> state;
             if (state == "on")
             {
-                pgm->setLed(true);
+                int e = pgm->setLed(true);
+                if (e < 0)
+                    std::cout << "Error: " << libusb_error_name(e) << std::endl;
             }
             else if (state == "off")
             {
-                pgm->setLed(false);
+                int e = pgm->setLed(false);
+                if (e < 0)
+                    std::cout << "Error: " << libusb_error_name(e) << std::endl;
             }
             else
             {
                 std::cout << "Unknown LED state: \"" << state << "\"" << std::endl;
             }
-        }
-        else if (command == "read")
-        {
-            std::string reg;
-            ls >> reg;
-            if (reg == "t")
-            {
-                int i = pgm->readT();
-                std::cout << "t: " << i << std::endl;
-            }
-            else
-            {
-                std::cout << "Unknown register: \"" << reg << "\"" << std::endl;
-            }
-        }
-        else if (command == "init")
-        {
-            std::cout << "Initializing programmer" << std::endl;
-            pgm->init();
         }
         else
         {
