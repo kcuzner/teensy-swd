@@ -17,6 +17,8 @@
  * will be brought low.
  *
  * The handle_queue function operates the bus state machine.
+ *
+ * All transmissions are LSB first
  */
 
 #include "arm_cm4.h"
@@ -72,15 +74,15 @@ static uint32_t cmd_in = 0;
 static uint32_t cmd_out = 0;
 
 // bit sequence for initializing an SWD connection
-// transmitted 0th index first, msb first
+// transmitted 0th index first, lsb first
 static const uint8_t swd_initseq[] = {
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, //56 ones
-    0x79, 0xe7, //swd switchover command
+    0xe7, 0x9e, //swd switchover command
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, //56 ones again
 };
 
 // bit sequence for stopping an SWD connection
-// transmitted 0th index first, msb first
+// transmitted 0th index first, lsb first
 static const uint8_t swd_stopseq[] = {
     0xff //we just need 8 ones
 };
@@ -193,7 +195,7 @@ void FTM0_IRQHandler(void)
         SWD_CLK_HIGH;
 
         //do our bus things while the target isn't listening
-        //swd_do_bus();
+        swd_do_bus();
 
         //clear the interrupt flag
         FTM0_SC &= ~FTM_SC_TOF_MASK;
@@ -205,9 +207,6 @@ void FTM0_IRQHandler(void)
             //clock is now low
             SWD_CLK_LOW;
         }
-
-        //do our bus things while the target isn't listening
-        swd_do_bus();
 
         //clear the interrupt flag
         FTM0_C0SC &= ~FTM_CnSC_CHF_MASK;
@@ -265,7 +264,7 @@ static void swd_do_bus(void)
         break;
     case SWD_BUS_INIT:
         SWD_DATA_OUT;
-        t = 0x80 >> (counter & 0x7); //this is the mask for the bit, transmitted MSB first
+        t = 0x01 << (counter & 0x7); //this is the mask for the bit, transmitted LSB first
         if (swd_initseq[counter >> 3] & t)
         {
             SWD_DATA_HIGH;
@@ -278,7 +277,7 @@ static void swd_do_bus(void)
         break;
     case SWD_BUS_STOP:
         SWD_DATA_OUT;
-        t = 0x80 >> (counter & 0x7); //this is the mask for the bit, transmitted MSB first
+        t = 0x01 << (counter & 0x7); //this is the mask for the bit, transmitted LSB first
         if (swd_stopseq[counter >> 3] & t)
         {
             SWD_DATA_HIGH;
@@ -363,8 +362,8 @@ static uint8_t swd_handle_read(cmd_t* cmd)
 
     if (cmd->state < SWD_READ_STATE_REQ)
     {
-        //msb first
-        mask = 0x80 >> cmd->state;
+        //lsb first
+        mask = 0x1 << cmd->state;
         SWD_DATA_OUT;
         if (cmd->request & mask)
         {
@@ -385,6 +384,7 @@ static uint8_t swd_handle_read(cmd_t* cmd)
     }
     else if (cmd->state < SWD_READ_STATE_RESP)
     {
+        //lsb first
         cmd->state_data |= SWD_DATA_VALUE << (cmd->state - SWD_READ_STATE_TM0);
         if (cmd->state == 11)
         {
@@ -419,6 +419,7 @@ static uint8_t swd_handle_read(cmd_t* cmd)
     }
     else if (cmd->state < SWD_READ_STATE_READ)
     {
+        //lsb first
         cmd->data |= SWD_DATA_VALUE << (cmd->state - SWD_READ_STATE_RESP);
         cmd->state++;
     }
@@ -455,8 +456,8 @@ static uint8_t swd_handle_write(cmd_t* cmd)
 
     if (cmd->state < SWD_WRITE_STATE_REQ)
     {
-        //msb first
-        mask = 0x80 << cmd->state;
+        //lsb first
+        mask = 0x1 << cmd->state;
         SWD_DATA_OUT;
         if (cmd->request & mask)
         {
@@ -477,6 +478,7 @@ static uint8_t swd_handle_write(cmd_t* cmd)
     }
     else if (cmd->state < SWD_WRITE_STATE_RESP)
     {
+        //lsb first
         cmd->state_data |= SWD_DATA_VALUE << (cmd->state - SWD_READ_STATE_TM0);
         cmd->state++;
     }
