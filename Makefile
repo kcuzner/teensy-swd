@@ -23,7 +23,7 @@ SRC = $(wildcard $(SRCDIR)/*.c) $(wildcard $(COMDIR)/*.c)
 ASM = $(wildcard $(SRCDIR)/*.s) $(wildcard $(COMDIR)/*.s)
 
 # Include directories
-INCLUDE  = -I$(INCDIR)
+INCLUDE  = -I$(INCDIR) -Ishared
 
 # Linker script
 LSCRIPT = $(COMDIR)/Teensy31_flash.ld

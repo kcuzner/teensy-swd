@@ -2,6 +2,8 @@
 
 #include <string>
 
+#include "../../shared/usb_types.h"
+
 #define ID_VENDOR 0x16c0
 #define ID_PROD   0x05dc
 #define STR_MANUF "kevincuzner.com"
@@ -76,24 +78,40 @@ Programmer::~Programmer()
     libusb_exit(this->context);
 }
 
-void Programmer::setLed(bool on)
+int Programmer::setLed(bool on)
 {
     if (on)
     {
-        libusb_control_transfer(this->dev, 0x00, 0x10, 0x00, 0x00, 0, 0, 250);
+        return libusb_control_transfer(this->dev, 0x00, 0x10, 0x00, 0x00, 0, 0, 250);
     }
     else
     {
-        libusb_control_transfer(this->dev, 0x00, 0x11, 0x00, 0x00, 0, 0, 250);
+        return libusb_control_transfer(this->dev, 0x00, 0x11, 0x00, 0x00, 0, 0, 250);
     }
 }
 
-int Programmer::readT(void)
+int Programmer::queueRead(uint8_t request, uint8_t index)
 {
-    unsigned char buf[4];
-    libusb_control_transfer(this->dev, 0x82, 0x12, 0x00, 0x00, buf, 4, 250);
+    read_req_t read = {
+        .request = request
+    };
 
-    return *(int*)buf;
+    return libusb_control_transfer(this->dev, 0x00, USB_SWD_BEGIN_READ >> 8, 0x00, index, (unsigned char*)(&read), sizeof(read), 250);
+}
+
+int Programmer::queueWrite(uint8_t request, uint32_t data, uint8_t index)
+{
+    write_req_t write = {
+        .request = request,
+        .data = data
+    };
+
+    return libusb_control_transfer(this->dev, 0x00, USB_SWD_BEGIN_WRITE >> 8, 0x00, index, (unsigned char*)(&write), sizeof(write), 250);
+}
+
+int Programmer::getResult(uint8_t index, swd_result_t* dest)
+{
+    return libusb_control_transfer(this->dev, 0x80, USB_SWD_READ_STATUS >> 8, 0x00, index, (unsigned char*)dest, sizeof(swd_result_t), 250);
 }
 
 libusb_device_handle* Programmer::getDevice()

@@ -33,11 +33,15 @@ int main()
             ls >> state;
             if (state == "on")
             {
-                pgm->setLed(true);
+                int e = pgm->setLed(true);
+                if (e < 0)
+                    std::cout << "Error: " << libusb_error_name(e) << std::endl;
             }
             else if (state == "off")
             {
-                pgm->setLed(false);
+                int e = pgm->setLed(false);
+                if (e < 0)
+                    std::cout << "Error: " << libusb_error_name(e) << std::endl;
             }
             else
             {
@@ -46,17 +50,25 @@ int main()
         }
         else if (command == "read")
         {
-            std::string reg;
-            ls >> reg;
-            if (reg == "t")
+            int req = 0;
+            ls >> std::hex >> req;
+            int e = pgm->queueRead(req, 0);
+            if (e < 0)
+                std::cout << "Error: " << libusb_error_name(e) << std::endl;
+        }
+        else if (command == "result")
+        {
+            swd_result_t res;
+            int e = pgm->getResult(0, &res);
+            if (e < 0)
             {
-                int i = pgm->readT();
-                std::cout << "t: " << i << std::endl;
+                std::cout << "Error: " << libusb_error_name(e) << std::endl;
+                continue;
             }
-            else
-            {
-                std::cout << "Unknown register: \"" << reg << "\"" << std::endl;
-            }
+
+            std::cout << "Done: " << (int)res.done << std::endl;
+            std::cout << "Data: " << (int)res.data << std::endl;
+            std::cout << "Result: " << (int)res.result << std::endl;
         }
         else
         {

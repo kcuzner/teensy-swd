@@ -2,13 +2,27 @@
  * Serial wire debug interface
  */
 
+/**
+ * How this works:
+ * Calling swd_init sets up the FTM to generate interrupts on timer overflow
+ * and on channel 1 match. Channel 1 is set up to match on FTM_MOD/2. The bus
+ * state variable is set to SWD_BUS_IDLE. The data is set to input and floats
+ * high. The clock is set to output and held high
+ *
+ * During the overflow interrupt, if the bus state is not SWD_BUS_IDLE, the
+ * clock will be brought high. In addition, the handle_queue function will be
+ * called always.
+ *
+ * During the match interrupt, if the bus state is not SWD_BUS_IDLE, the clock
+ * will be brought low.
+ *
+ * The handle_queue function operates the bus state machine.
+ *
+ * All transmissions are LSB first
+ */
+
 #include "arm_cm4.h"
 #include "swd.h"
-
-#define SWD_INIT_KEY 0x79e7
-#define SWD_INIT_STATE_RESET0 50
-#define SWD_INIT_STATE_SWITCH (SWD_INIT_STATE_RESET0 + 16)
-#define SWD_INIT_STATE_RESET1 (SWD_INIT_STATE_SWITCH + 50)
 
 #define SWD_RESP_OK    0b001
 #define SWD_RESP_WAIT  0b010
@@ -20,7 +34,6 @@
 #define SWD_READ_STATE_READ   (SWD_READ_STATE_RESP + 32)
 #define SWD_READ_STATE_PARITY (SWD_READ_STATE_READ + 1)
 #define SWD_READ_STATE_TM1    (SWD_READ_STATE_PARITY + 1)
-#define SWD_READ_STATE_FINISH (SWD_READ_STATE_TM1 + 8)
 
 #define SWD_WRITE_STATE_REQ    8
 #define SWD_WRITE_STATE_TM0    (SWD_WRITE_STATE_REQ + 1)
@@ -30,45 +43,93 @@
 #define SWD_WRITE_STATE_PARITY (SWD_WRITE_STATE_DATA + 1)
 #define SWD_WRITE_STATE_FINISH (SWD_WRITE_STATE_PARITY + 8)
 
-typedef enum { SWD_INIT, SWD_READ, SWD_WRITE, SWD_IDLE } cmd_type_t;
+#define NEXT(I) (I + 1)
+#define PREV(I) (I - 1)
+#define NEXT_INDEX(S, I) (I >= (S) ? 0 : NEXT(I))
+
+typedef enum { SWD_READ, SWD_WRITE } cmd_type_t;
+
+/**
+ * Bus state type
+ * SWD_BUS_IDLE: The bus is idle, clock should be held high, data should be released
+ * SWD_BUS_INIT: The bus is being initialized to SWD mode (>50 pulses, swd sequence, another 50 pulses, read idcode)
+ * SWD_BUS_RUN: The bus is currently dequeing and executing commands
+ * SWD_BUS_STOP: The bus is stopping by clocking at least 8 additional pulses before returning to SWD_BUS_IDLE
+ */
+typedef enum { SWD_BUS_IDLE, SWD_BUS_INIT, SWD_BUS_RUN, SWD_BUS_STOP } bus_state_t;
 
 typedef struct {
     cmd_type_t command;
+    swd_result_t* result; //written with the result of the command
     uint8_t request;
     uint32_t data;
-    uint32_t state; //written by interrupt when swd_busy = TRUE
+    uint32_t state;
+    uint32_t state_data;
 } cmd_t;
 
-//written only by the interrupt routine
-static uint8_t swd_busy = FALSE;
+static bus_state_t state = SWD_BUS_IDLE;
 
-//written only by the interface routines when swd_busy is FALSE
-static cmd_t current_command;
+static cmd_t cmd_queue[SWD_QUEUE_LENGTH];
+static uint32_t cmd_in = 0;
+static uint32_t cmd_out = 0;
 
-//written only by the interrupt
-static int8_t last_response;
-//written only by the interrupt
-static uint32_t last_read_data;
+// bit sequence for initializing an SWD connection
+// transmitted 0th index first, lsb first
+static const uint8_t swd_initseq[] = {
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, //56 ones
+    0xe7, 0x9e, //swd switchover command
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, //56 ones again
+};
+
+// bit sequence for stopping an SWD connection
+// transmitted 0th index first, lsb first
+static const uint8_t swd_stopseq[] = {
+    0xff //we just need 8 ones
+};
 
 /**
- * Starts the SWD bus
+ * Returns true if the queue is empty
  */
-static void swd_start_bus(uint8_t data_state);
+static uint8_t swd_queue_empty(void);
+/**
+ * Returns true if the queue is full
+ */
+static uint8_t swd_queue_full(void);
+/**
+ * Queues a command
+ * @param cmd Command to queue (by copying)
+ * @return TRUE if the operation succeeded
+ */
+static int8_t swd_queue_cmd(const cmd_t* cmd);
+/**
+ * Dequeues a command
+ * @param dest Destination to dequeue the command into
+ * @return TRUE if the operation succeeded
+ */
+static int8_t swd_dequeue_cmd(cmd_t* dest);
 
 /**
- * Changes the bus into an idle state, stopping the clock, setting data to input,
- * and resetting the busy state to FALSE
+ * Handles the bus state machine
  */
-static void swd_idle_bus(void);
+static void swd_do_bus(void);
 
 /**
  * Handles the current command
+ * @return SWD_DONE when the passed command is complete
  */
-static void swd_handle_current_command(void);
+static uint8_t swd_handle_command(cmd_t* cmd);
 
-static void swd_handle_init(void);
-static void swd_handle_read(void);
-static void swd_handle_write(void);
+/**
+ * Handles a read command
+ * @return SWD_DONE when the passed command is complete
+ */
+static uint8_t swd_handle_read(cmd_t* cmd);
+
+/**
+ * Handles a write command
+ * @return SWD_DONE when the passed command is complete
+ */
+static uint8_t swd_handle_write(cmd_t* cmd);
 
 void swd_init(void)
 {
@@ -77,6 +138,7 @@ void swd_init(void)
     SWD_DATA_MODE;
 
     //data is input for the moment
+    SWD_CLK_OUT;
     SWD_DATA_IN;
 
     //set up ftm0 to generate 50% pwm at a relatively high frequency
@@ -85,7 +147,7 @@ void swd_init(void)
     FTM0_SC = 0;
     FTM0_CNTIN = 0;
     FTM0_CNT = 0;
-    FTM0_MOD = 32767;
+    FTM0_MOD = 2048;
     FTM0_C0SC = FTM_CnSC_MSB_MASK | FTM_CnSC_ELSB_MASK;
     FTM0_C0V = FTM0_MOD / 2; //50% duty cycle
 
@@ -93,51 +155,36 @@ void swd_init(void)
     FTM0_C0SC |= FTM_CnSC_CHIE_MASK;
     enable_irq(IRQ(INT_FTM0));
 
-    swd_idle_bus();
+    //start up the bus timer interrupts. The bus will remain "idle" until a command is queued
+    //the clock is now high
+    SWD_CLK_HIGH;
+    FTM0_CNT = 0;
+    //run the clock (system clock, prescaler 1)
+    //enable the ftm0 overflow so we can reset the clock
+    FTM0_SC = FTM_SC_TOIE_MASK | FTM_SC_CLKS(1) | FTM_SC_PS(0);
 }
 
-int8_t swd_is_busy(void)
+int8_t swd_begin_write(uint8_t req, uint32_t data, swd_result_t* res)
 {
-    return swd_busy;
-}
-
-int8_t swd_begin_init(void)
-{
-    if (swd_is_busy())
-        return SWD_ERR_BUSY;
-
     cmd_t command = {
-        .command = SWD_INIT
+        .command = SWD_WRITE,
+        .request = req,
+        .data = data,
+        .result = res
     };
 
-    current_command = command;
-
-    //start the command
-    swd_handle_current_command();
-
-    return SWD_OK;
+    return swd_queue_cmd(&command);
 }
 
-int8_t swd_begin_write(uint8_t req, uint32_t data)
+int8_t swd_begin_read(uint8_t req, swd_result_t* res)
 {
-    return SWD_OK;
-}
+    cmd_t command = {
+        .command = SWD_READ,
+        .request = req,
+        .result = res
+    };
 
-int8_t swd_begin_read(uint8_t req)
-{
-    return SWD_OK;
-}
-
-int8_t swd_get_last_response(int8_t* dest)
-{
-    *dest = last_response;
-    return SWD_OK;
-}
-
-int8_t swd_get_last_read(uint32_t* dest)
-{
-    *dest = last_read_data;
-    return SWD_OK;
+    return swd_queue_cmd(&command);
 }
 
 void FTM0_IRQHandler(void)
@@ -146,145 +193,179 @@ void FTM0_IRQHandler(void)
     {
         //clock is now high
         SWD_CLK_HIGH;
-        GPIOC_PSOR=(1<<5);
+
+        //do our bus things while the target isn't listening
+        swd_do_bus();
 
         //clear the interrupt flag
         FTM0_SC &= ~FTM_SC_TOF_MASK;
     }
     else if (FTM0_C0SC & FTM_CnSC_CHF_MASK)
     {
-        //clock is now low
-        SWD_CLK_LOW;
-        GPIOC_PCOR=(1<<5);
-
-        //handle the current command
-        swd_handle_current_command();
+        if (state != SWD_BUS_IDLE)
+        {
+            //clock is now low
+            SWD_CLK_LOW;
+        }
 
         //clear the interrupt flag
         FTM0_C0SC &= ~FTM_CnSC_CHF_MASK;
     }
 }
 
-static void swd_start_bus(uint8_t data_state)
+static uint8_t swd_queue_empty(void)
 {
-    //set data to output
-    SWD_DATA_OUT;
-    if (data_state)
-    {
-        SWD_DATA_HIGH;
-    }
-    else
-    {
-        SWD_DATA_LOW;
-    }
-
-    //the clock is now high
-    SWD_CLK_HIGH;
-    FTM0_CNT = 0;
-    //run the clock (system clock, prescaler 1)
-    //enable the ftm0 overflow so we can reset the clock
-    FTM0_SC = FTM_SC_TOIE_MASK | FTM_SC_CLKS(1) | FTM_SC_PS(7);
+    return cmd_in == cmd_out;
 }
 
-static void swd_idle_bus(void)
+static uint8_t swd_queue_full(void)
 {
-    //stop the clock
-    FTM0_SC = 0;
-    //set data to output, driven low
-    SWD_DATA_OUT;
-    SWD_DATA_LOW;
-    //we are no longer busy
-    swd_busy = FALSE;
+    return NEXT_INDEX(SWD_QUEUE_LENGTH - 1, cmd_in) == cmd_out;
 }
 
-static void swd_handle_current_command(void)
+static int8_t swd_queue_cmd(const cmd_t* cmd)
 {
-    switch (current_command.command)
+    if (swd_queue_full())
+        return SWD_ERR;
+
+    DisableInterrupts;
+    cmd_queue[cmd_in] = *cmd;
+    cmd_in = NEXT_INDEX(SWD_QUEUE_LENGTH - 1,cmd_in);
+    EnableInterrupts;
+
+    return SWD_OK;
+}
+
+static int8_t swd_dequeue_cmd(cmd_t* dest)
+{
+    if (swd_queue_empty())
+        return SWD_ERR;
+
+    DisableInterrupts;
+    *dest = cmd_queue[cmd_out];
+    cmd_out = NEXT_INDEX(SWD_QUEUE_LENGTH - 1, cmd_out);
+    EnableInterrupts;
+
+    return SWD_OK;
+}
+
+static void swd_do_bus(void)
+{
+    static uint32_t counter = 0; //generic counter for the state
+    static cmd_t current_command;
+
+    uint8_t t;
+
+    //state actions
+    switch (state)
     {
-    case SWD_INIT:
-        swd_handle_init();
+    case SWD_BUS_IDLE:
+        SWD_DATA_IN; //let the data float high
         break;
-    case SWD_READ:
-        swd_handle_read();
+    case SWD_BUS_INIT:
+        SWD_DATA_OUT;
+        t = 0x01 << (counter & 0x7); //this is the mask for the bit, transmitted LSB first
+        if (swd_initseq[counter >> 3] & t)
+        {
+            SWD_DATA_HIGH;
+        }
+        else
+        {
+            SWD_DATA_LOW;
+        }
+        counter++;
         break;
-    case SWD_WRITE:
-        swd_handle_write();
-        break;
-    case SWD_IDLE:
-        //since this executes when the clock is brought low, it is now safe to idle the bus
-        swd_idle_bus();
+    case SWD_BUS_STOP:
+        SWD_DATA_OUT;
+        t = 0x01 << (counter & 0x7); //this is the mask for the bit, transmitted LSB first
+        if (swd_stopseq[counter >> 3] & t)
+        {
+            SWD_DATA_HIGH;
+        }
+        else
+        {
+            SWD_DATA_LOW;
+        }
+        counter++;
         break;
     default:
-        //invalid command? stop the bus
-        last_response = SWD_ERR_BUS;
-        current_command.command = SWD_IDLE;
+        break;
+    }
+
+    //state transitions
+    switch (state)
+    {
+    case SWD_BUS_IDLE:
+        if (!swd_queue_empty())
+        {
+            counter = 0;
+            state = SWD_BUS_INIT;
+        }
+        break;
+    case SWD_BUS_INIT:
+        if (counter >= sizeof(swd_initseq) * 8)
+        {
+            if (swd_dequeue_cmd(&current_command) == SWD_OK)
+            {
+                //if we have finished the init sequence and dequeued a command, initiate run mode
+                state = SWD_BUS_RUN;
+            }
+            else
+            {
+                //a failure to dequeue: stop the bus
+                counter = 0;
+                state = SWD_BUS_STOP;
+            }
+        }
+        break;
+    case SWD_BUS_RUN:
+        if (swd_handle_command(&current_command) == SWD_DONE)
+        {
+            if (swd_queue_empty() || swd_dequeue_cmd(&current_command) != SWD_OK)
+            {
+                //we either have an empty queue or failed to dequeue a new command
+                //we move into the stop state
+                counter = 0;
+                state = SWD_BUS_STOP;
+            }
+        }
+        break;
+    case SWD_BUS_STOP:
+        if (counter >= sizeof(swd_stopseq) * 8)
+        {
+            //we may now idle the bus
+            state = SWD_BUS_IDLE;
+        }
         break;
     }
 }
 
-static void swd_handle_init(void)
+static uint8_t swd_handle_command(cmd_t* cmd)
 {
-    uint16_t mask;
-    cmd_t next;
-
-    if (current_command.state == 0)
+    switch (cmd->command)
     {
-        //initial state
-        swd_start_bus(1);
-        current_command.state++;
-    }
-    else if (current_command.state <= SWD_INIT_STATE_RESET0)
-    {
-        //50 high pulses
-        SWD_DATA_HIGH;
-        current_command.state++;
-    }
-    else if (current_command.state <= SWD_INIT_STATE_SWITCH)
-    {
-        //we output the 16 bit switching code
-        mask = 1 << (current_command.state - 50);
-        if (SWD_INIT_KEY & mask)
-        {
-            SWD_DATA_HIGH;
-        }
-        else
-        {
-            SWD_DATA_LOW;
-        }
-        current_command.state++;
-    }
-    else if (current_command.state <= SWD_INIT_STATE_RESET1)
-    {
-        //50 more high pulses
-        SWD_DATA_HIGH;
-        current_command.state++;
-    }
-    else
-    {
-        //we are now done. initiate a read of the SW-DP IDCODE
-        next.command = SWD_READ;
-        next.request = SWD_DP_READ_IDCODE;
-        next.state = 0;
-        current_command = next;
+    case SWD_READ:
+        return swd_handle_read(cmd);
+    case SWD_WRITE:
+        return swd_handle_write(cmd);
+    default:
+        //invalid command? we are done with it
+        cmd->result->done = 1;
+        cmd->result->result = SWD_ERR_BUS;
+        return SWD_DONE;
     }
 }
 
-static void swd_handle_read(void)
+static uint8_t swd_handle_read(cmd_t* cmd)
 {
-    static uint32_t data;
     uint32_t mask;
 
-    if (current_command.state == 0)
+    if (cmd->state < SWD_READ_STATE_REQ)
     {
-        //initial state
-        swd_start_bus(current_command.request & 0x1);
-        current_command.state++;
-    }
-    else if (current_command.state <= SWD_READ_STATE_REQ)
-    {
-        mask = 1 << current_command.state;
-        current_command.state++;
-        if (current_command.request & mask)
+        //lsb first
+        mask = 0x1 << cmd->state;
+        SWD_DATA_OUT;
+        if (cmd->request & mask)
         {
             SWD_DATA_HIGH;
         }
@@ -292,154 +373,93 @@ static void swd_handle_read(void)
         {
             SWD_DATA_LOW;
         }
-        current_command.state++;
+        cmd->state++;
     }
-    else if (current_command.state <= SWD_READ_STATE_TM0)
+    else if (cmd->state < SWD_READ_STATE_TM0)
     {
-        //turnaround: release the data line
+        //turnaround
         SWD_DATA_IN;
-        current_command.state++;
+        cmd->state_data = 0; //prepare to read response
+        cmd->state++;
     }
-    else if (current_command.state <= SWD_READ_STATE_RESP)
+    else if (cmd->state < SWD_READ_STATE_RESP)
     {
-        if (current_command.state == SWD_READ_STATE_TM0 + 1)
-            data = 0;
-
-        data |= SWD_DATA_VALUE <<  (current_command.state - SWD_READ_STATE_TM0);
-
-        if (current_command.state == SWD_READ_STATE_RESP)
+        //lsb first
+        cmd->state_data |= SWD_DATA_VALUE << (cmd->state - SWD_READ_STATE_TM0);
+        if (cmd->state == 11)
         {
-            switch (data)
+            //determine response
+            switch (cmd->state_data)
             {
             case SWD_RESP_OK:
-                last_response = SWD_OK;
-                break;
-            case SWD_RESP_WAIT:
-                last_response = SWD_ERR_WAIT;
-                swd_idle_bus();
+                cmd->data = 0;
+                cmd->state++;
                 break;
             case SWD_RESP_FAULT:
-                last_response = SWD_ERR_FAULT;
-                swd_idle_bus();
-                break;
+                //fault error
+                cmd->result->result = SWD_ERR_FAULT;
+                cmd->result->done = 1;
+                return SWD_DONE;
+            case SWD_RESP_WAIT:
+                //the SWD slave is busy
+                cmd->result->result = SWD_ERR_BUSY;
+                cmd->result->done = 1;
+                return SWD_DONE;
             default:
-                last_response = SWD_ERR_BUS;
-                swd_idle_bus();
-                break;
+                //unknown error
+                cmd->result->result = SWD_ERR_BUS;
+                cmd->result->done = 1;
+                return SWD_DONE;
             }
         }
-
-        current_command.state++;
+        else
+        {
+            cmd->state++;
+        }
     }
-    else if (current_command.state <= SWD_READ_STATE_READ)
+    else if (cmd->state < SWD_READ_STATE_READ)
     {
-        //begin reading the thing
-        if (current_command.state == SWD_READ_STATE_RESP + 1)
-            data = 0;
-
-        data |= SWD_DATA_VALUE << (current_command.state - SWD_READ_STATE_RESP);
-
-        current_command.state++;
+        //lsb first
+        cmd->data |= SWD_DATA_VALUE << (cmd->state - SWD_READ_STATE_RESP);
+        cmd->state++;
     }
-    else if (current_command.state <= SWD_READ_STATE_PARITY)
+    else if (cmd->state < SWD_READ_STATE_PARITY)
     {
         //TODO: Use the parity bit
-        last_read_data = data;
-        current_command.state++;
+        cmd->result->data = cmd->data;
+        cmd->state++;
     }
-    else if (current_command.state <= SWD_READ_STATE_TM1)
+    else if (cmd->state < SWD_READ_STATE_TM1)
     {
-        //turnaround: grab the data line and set to zero
+        //turnaround
         SWD_DATA_OUT;
-        SWD_DATA_LOW;
-        current_command.state++;
-    }
-    else if (current_command.state <= SWD_READ_STATE_FINISH)
-    {
-        //continue clocking low
-        SWD_DATA_LOW;
+        cmd->result->result = SWD_OK;
+        cmd->result->done = 1;
+        //we are now done
+        return SWD_DONE;
     }
     else
     {
-        //command is finished
-        swd_idle_bus();
+        //wat?
+        cmd->result->result = SWD_ERR_BUS;
+        cmd->result->done = 1;
+        return SWD_DONE;
     }
+
+    //if we make it this far, we assume the state machine is not finished
+    return !SWD_DONE;
 }
 
-static void swd_handle_write(void)
+static uint8_t swd_handle_write(cmd_t* cmd)
 {
-    static uint32_t data;
     uint32_t mask, temp;
 
-    if (current_command.state == 0)
+    if (cmd->state < SWD_WRITE_STATE_REQ)
     {
-        //initial state
-        swd_start_bus(current_command.request & 0x1);
-        current_command.state++;
-    }
-    else if (current_command.state <= SWD_WRITE_STATE_REQ)
-    {
-        mask = 1 << current_command.state;
-        current_command.state++;
-        if (current_command.request & mask)
-        {
-            SWD_DATA_HIGH;
-        }
-        else
-        {
-            SWD_DATA_LOW;
-        }
-        current_command.state++;
-    }
-    else if (current_command.state <= SWD_WRITE_STATE_TM0)
-    {
-        //turnaround: release the data line
-        SWD_DATA_IN;
-        current_command.state++;
-    }
-    else if (current_command.state <= SWD_WRITE_STATE_RESP)
-    {
-        if (current_command.state == SWD_WRITE_STATE_TM0 + 1)
-            data = 0;
-
-        data |= SWD_DATA_VALUE <<  (current_command.state - SWD_WRITE_STATE_TM0);
-
-        if (current_command.state == SWD_WRITE_STATE_RESP)
-        {
-            switch (data)
-            {
-            case SWD_RESP_OK:
-                last_response = SWD_OK;
-                break;
-            case SWD_RESP_WAIT:
-                last_response = SWD_ERR_WAIT;
-                swd_idle_bus();
-                break;
-            case SWD_RESP_FAULT:
-                last_response = SWD_ERR_FAULT;
-                swd_idle_bus();
-                break;
-            default:
-                last_response = SWD_ERR_BUS;
-                swd_idle_bus();
-                break;
-            }
-        }
-
-        current_command.state++;
-    }
-    else if (current_command.state <= SWD_WRITE_STATE_TM1)
-    {
-        //turnaroud: grab data line and set it to zero
+        //lsb first
+        mask = 0x1 << cmd->state;
         SWD_DATA_OUT;
-        SWD_DATA_LOW;
-
-        current_command.state++;
-    }
-    else if (current_command.state <= SWD_WRITE_STATE_DATA)
-    {
-        mask = 1 << (current_command.state - SWD_WRITE_STATE_TM1);
-        if (current_command.data & mask)
+        if (cmd->request & mask)
         {
             SWD_DATA_HIGH;
         }
@@ -447,13 +467,66 @@ static void swd_handle_write(void)
         {
             SWD_DATA_LOW;
         }
-
-        current_command.state++;
+        cmd->state++;
     }
-    else if (current_command.state <= SWD_WRITE_STATE_PARITY)
+    else if (cmd->state < SWD_WRITE_STATE_TM0)
+    {
+        //turnaround
+        SWD_DATA_IN;
+        cmd->state_data = 0; //prepare to read response
+        cmd->state++;
+    }
+    else if (cmd->state < SWD_WRITE_STATE_RESP)
+    {
+        //lsb first
+        cmd->state_data |= SWD_DATA_VALUE << (cmd->state - SWD_READ_STATE_TM0);
+        cmd->state++;
+    }
+    else if (cmd->state < SWD_WRITE_STATE_TM1)
+    {
+        //turnaround
+        SWD_DATA_OUT;
+        switch (cmd->state_data)
+        {
+        case SWD_RESP_OK:
+            cmd->data = 0;
+            cmd->state++;
+            break;
+        case SWD_RESP_FAULT:
+            //fault error
+            cmd->result->result = SWD_ERR_FAULT;
+            cmd->result->done = 1;
+            return SWD_DONE;
+        case SWD_RESP_WAIT:
+            //the SWD slave is busy
+            cmd->result->result = SWD_ERR_BUSY;
+            cmd->result->done = 1;
+            return SWD_DONE;
+        default:
+            //unknown error
+            cmd->result->result = SWD_ERR_BUS;
+            cmd->result->done = 1;
+            return SWD_DONE;
+        }
+    }
+    else if (cmd->state < SWD_WRITE_STATE_DATA)
+    {
+        //lsb first
+        mask = 1 << (cmd->state - SWD_WRITE_STATE_TM1);
+        if (cmd->data & mask)
+        {
+            SWD_DATA_HIGH;
+        }
+        else
+        {
+            SWD_DATA_LOW;
+        }
+        cmd->state++;
+    }
+    else if (cmd->state < SWD_WRITE_STATE_PARITY)
     {
         //parallel parity bit calculation: http://www.graphics.stanford.edu/~seander/bithacks.html#ParityParallel
-        temp = current_command.data;
+        temp = cmd->data;
         temp ^= temp >> 16;
         temp ^= temp >> 8;
         temp ^= temp >> 4;
@@ -466,15 +539,18 @@ static void swd_handle_write(void)
         {
             SWD_DATA_LOW;
         }
-    }
-    else if (current_command.state <= SWD_WRITE_STATE_FINISH)
-    {
-        //clock low
-        SWD_DATA_LOW;
+        cmd->result->result = SWD_OK;
+        cmd->result->done = 1;
+        return SWD_DONE;
     }
     else
     {
-        //command is finished
-        swd_idle_bus();
+        //wat?
+        cmd->result->result = SWD_ERR_BUS;
+        cmd->result->done = 1;
+        return SWD_DONE;
     }
+
+    //if we get this far, we assume that the state machine needs to continue
+    return !SWD_DONE;
 }
