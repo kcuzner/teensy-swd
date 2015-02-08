@@ -225,8 +225,6 @@ static void usb_endp0_handle_setup(setup_t* packet)
     const descriptor_entry_t* entry;
     const uint8_t* data = NULL;
     uint8_t data_length = 0;
-    static int t = 4;
-
 
     switch(packet->wRequestAndType)
     {
@@ -273,7 +271,7 @@ static void usb_endp0_handle_setup(setup_t* packet)
     case USB_SWD_READ_STATUS: //reads the status of a command
         if (packet->wIndex >= (N_COMMAND_RESULTS))
             goto stall;
-        data = &results[packet->wIndex];
+        data = (void*)&results[packet->wIndex];
         data_length = sizeof(results[packet->wIndex]);
         break;
     default:
@@ -342,6 +340,8 @@ void usb_endp0_handler(uint8_t stat)
             bdt->desc = BDT_DESC(ENDP0_SIZE, 1);
             break;
         case USB_SWD_BEGIN_WRITE:
+            write_req = *((write_req_t*)(bdt->addr));
+            swd_begin_write(write_req.request, write_req.data, &results[last_setup.wIndex]);
             bdt->desc = BDT_DESC(ENDP0_SIZE, 1);
             break;
         default:

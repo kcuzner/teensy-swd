@@ -363,6 +363,7 @@ static uint8_t swd_handle_read(cmd_t* cmd)
 
     if (cmd->state < SWD_READ_STATE_REQ)
     {
+        //msb first
         mask = 0x80 >> cmd->state;
         SWD_DATA_OUT;
         if (cmd->request & mask)
@@ -454,7 +455,8 @@ static uint8_t swd_handle_write(cmd_t* cmd)
 
     if (cmd->state < SWD_WRITE_STATE_REQ)
     {
-        mask = 1 << cmd->state;
+        //msb first
+        mask = 0x80 << cmd->state;
         SWD_DATA_OUT;
         if (cmd->request & mask)
         {
