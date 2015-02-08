@@ -13,6 +13,13 @@ So, I have a chicken-and-the-egg problem. I assembled one of my [kl2-dev board]
 some way to load the initial bootloader on to it. I had realized this before,
 but I never got around to actually doing something about it until now.
 
+There are other options for this such as buying a JTAG dongle, using one of the
+FRDM boards, or using the [CMSIS-DAP](https://github.com/mbedmicro/CMSIS-DAP)
+loader, but those require either purchasing new hardware, modifying hardware or
+porting things to new chips. Thus, it will be easier/cheaper for me just to
+write a simple program that can execute SWD commands (possibly in a scripted
+fashion).
+
 ## What?
 
 This project is the host and firmware for a USB to SWD adaptor. The objective
