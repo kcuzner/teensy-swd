@@ -48,6 +48,28 @@ int main()
                 std::cout << "Unknown LED state: \"" << state << "\"" << std::endl;
             }
         }
+        else if (command == "read")
+        {
+            int req = 0;
+            ls >> std::hex >> req;
+            int e = pgm->queueRead(req, 0);
+            if (e < 0)
+                std::cout << "Error: " << libusb_error_name(e) << std::endl;
+        }
+        else if (command == "result")
+        {
+            swd_result_t res;
+            int e = pgm->getResult(0, &res);
+            if (e < 0)
+            {
+                std::cout << "Error: " << libusb_error_name(e) << std::endl;
+                continue;
+            }
+
+            std::cout << "Done: " << (int)res.done << std::endl;
+            std::cout << "Data: " << (int)res.data << std::endl;
+            std::cout << "Result: " << (int)res.result << std::endl;
+        }
         else
         {
             std::cout << "Unknown command \"" << command << "\"" << std::endl;

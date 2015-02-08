@@ -121,10 +121,12 @@ static bdt_t table[(USB_N_ENDPOINTS + 1)*4]; //max endpoints is 15 + 1 control
  */
 static uint8_t endp0_rx[2][ENDP0_SIZE];
 
+#define N_COMMAND_RESULTS 256
+
 /**
  * Holds the current transaction results, indexed by request index
  */
-static swd_result_t results[255];
+static swd_result_t results[N_COMMAND_RESULTS];
 
 /**
  * Device descriptor
@@ -257,10 +259,22 @@ static void usb_endp0_handle_setup(setup_t* packet)
         GPIOC_PCOR=(1<<5);
         break;
     case USB_SWD_BEGIN_READ: //begins a read request
+        //is the command slot this indexes still in use?
+        if (packet->wIndex >= (N_COMMAND_RESULTS) || !results[packet->wIndex].done)
+            goto stall;
         //wait for OUT
         break;
     case USB_SWD_BEGIN_WRITE: //begins a write request
+        //is the command slot this indexes still in use?
+        if (packet->wIndex >= (N_COMMAND_RESULTS) || !results[packet->wIndex].done)
+            goto stall;
         //wait for OUT
+        break;
+    case USB_SWD_READ_STATUS: //reads the status of a command
+        if (packet->wIndex >= (N_COMMAND_RESULTS))
+            goto stall;
+        data = &results[packet->wIndex];
+        data_length = sizeof(results[packet->wIndex]);
         break;
     default:
         goto stall;
@@ -284,6 +298,9 @@ static void usb_endp0_handle_setup(setup_t* packet)
 void usb_endp0_handler(uint8_t stat)
 {
     static setup_t last_setup;
+
+    read_req_t read_req;
+    write_req_t write_req;
 
     //determine which bdt we are looking at here
     bdt_t* bdt = &table[BDT_INDEX(0, (stat & USB_STAT_TX_MASK) >> USB_STAT_TX_SHIFT, (stat & USB_STAT_ODD_MASK) >> USB_STAT_ODD_SHIFT)];
@@ -320,9 +337,12 @@ void usb_endp0_handler(uint8_t stat)
         switch (last_setup.wRequestAndType)
         {
         case USB_SWD_BEGIN_READ:
-
+            read_req = *((read_req_t*)(bdt->addr));
+            swd_begin_read(read_req.request, &results[last_setup.wIndex]);
+            bdt->desc = BDT_DESC(ENDP0_SIZE, 1);
             break;
         case USB_SWD_BEGIN_WRITE:
+            bdt->desc = BDT_DESC(ENDP0_SIZE, 1);
             break;
         default:
             //give the buffer back
@@ -381,6 +401,12 @@ void usb_endp15_handler(uint8_t) __attribute__((weak, alias("usb_endp_default_ha
 void usb_init(void)
 {
     uint32_t i;
+
+    //reset the command statuses
+    for (i = 0; i < N_COMMAND_RESULTS; i++)
+    {
+        results[i].done = 1;
+    }
 
     //reset the buffer descriptors
     for (i = 0; i < (USB_N_ENDPOINTS + 1) * 4; i++)

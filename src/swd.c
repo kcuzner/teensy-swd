@@ -145,7 +145,7 @@ void swd_init(void)
     FTM0_SC = 0;
     FTM0_CNTIN = 0;
     FTM0_CNT = 0;
-    FTM0_MOD = 1024;
+    FTM0_MOD = 2048;
     FTM0_C0SC = FTM_CnSC_MSB_MASK | FTM_CnSC_ELSB_MASK;
     FTM0_C0V = FTM0_MOD / 2; //50% duty cycle
 
@@ -189,14 +189,11 @@ void FTM0_IRQHandler(void)
 {
     if (FTM0_SC & FTM_SC_TOF_MASK)
     {
-        if (state != SWD_BUS_IDLE)
-        {
-            //clock is now high
-            SWD_CLK_HIGH;
-        }
+        //clock is now high
+        SWD_CLK_HIGH;
 
         //do our bus things while the target isn't listening
-        swd_do_bus();
+        //swd_do_bus();
 
         //clear the interrupt flag
         FTM0_SC &= ~FTM_SC_TOF_MASK;
@@ -208,6 +205,9 @@ void FTM0_IRQHandler(void)
             //clock is now low
             SWD_CLK_LOW;
         }
+
+        //do our bus things while the target isn't listening
+        swd_do_bus();
 
         //clear the interrupt flag
         FTM0_C0SC &= ~FTM_CnSC_CHF_MASK;
@@ -265,7 +265,7 @@ static void swd_do_bus(void)
         break;
     case SWD_BUS_INIT:
         SWD_DATA_OUT;
-        t = 0x8 >> (counter & 0x7); //this is the mask for the bit, transmitted MSB first
+        t = 0x80 >> (counter & 0x7); //this is the mask for the bit, transmitted MSB first
         if (swd_initseq[counter >> 3] & t)
         {
             SWD_DATA_HIGH;
@@ -278,7 +278,7 @@ static void swd_do_bus(void)
         break;
     case SWD_BUS_STOP:
         SWD_DATA_OUT;
-        t = 0x8 >> (counter & 0x7); //this is the mask for the bit, transmitted MSB first
+        t = 0x80 >> (counter & 0x7); //this is the mask for the bit, transmitted MSB first
         if (swd_stopseq[counter >> 3] & t)
         {
             SWD_DATA_HIGH;
@@ -363,7 +363,7 @@ static uint8_t swd_handle_read(cmd_t* cmd)
 
     if (cmd->state < SWD_READ_STATE_REQ)
     {
-        mask = 1 << cmd->state;
+        mask = 0x80 >> cmd->state;
         SWD_DATA_OUT;
         if (cmd->request & mask)
         {
