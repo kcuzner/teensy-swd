@@ -43,6 +43,18 @@
 #define SWD_WRITE_STATE_PARITY (SWD_WRITE_STATE_DATA + 1)
 #define SWD_WRITE_STATE_FINISH (SWD_WRITE_STATE_PARITY + 8)
 
+#define MASK_SET(D,M) D|=M
+#define MASK_CLR(D,M) D&=~M
+
+#define SWD_CLK_MASK (1<<SWD_CLK_PIN)
+#define SWD_DIO_MASK (1<<SWD_DIO_PIN)
+
+#define SWD_DIO_IN   MASK_CLR(SWD_GPIO->PDDR, SWD_DIO_MASK)
+#define SWD_DIO_OUT  MASK_SET(SWD_GPIO->PDDR, SWD_DIO_MASK)
+#define SWD_DIO_HIGH MASK_SET(SWD_GPIO->PSOR, SWD_DIO_MASK)
+#define SWD_DIO_LOW  MASK_SET(SWD_GPIO->PCOR, SWD_DIO_MASK)
+#define SWD_DIO_VALUE ((SWD_GPIO->PDIR & SWD_DIO_MASK) >> SWD_DIO_PIN)
+
 #define NEXT(I) (I + 1)
 #define PREV(I) (I - 1)
 #define NEXT_INDEX(S, I) (I >= (S) ? 0 : NEXT(I))
@@ -135,11 +147,11 @@ void swd_init(void)
 {
     //set up data and clock for GPIO
     SWD_CLK_MODE;
-    SWD_DATA_MODE;
+    SWD_DIO_MODE;
 
     //data is input for the moment
-    SWD_CLK_OUT;
-    SWD_DATA_IN;
+    MASK_SET(SWD_GPIO->PDDR, SWD_CLK_MASK);
+    MASK_CLR(SWD_GPIO->PDDR, SWD_DIO_MASK);
 
     //set up ftm0 to generate 50% pwm at a relatively high frequency
     SIM_SCGC6 |= SIM_SCGC6_FTM0_MASK;//enable clock
@@ -157,7 +169,7 @@ void swd_init(void)
 
     //start up the bus timer interrupts. The bus will remain "idle" until a command is queued
     //the clock is now high
-    SWD_CLK_HIGH;
+    MASK_SET(SWD_GPIO->PSOR, SWD_CLK_MASK);
     FTM0_CNT = 0;
     //run the clock (system clock, prescaler 1)
     //enable the ftm0 overflow so we can reset the clock
@@ -192,10 +204,7 @@ void FTM0_IRQHandler(void)
     if (FTM0_SC & FTM_SC_TOF_MASK)
     {
         //clock is now high
-        SWD_CLK_HIGH;
-
-        //do our bus things while the target isn't listening
-        swd_do_bus();
+        MASK_SET(SWD_GPIO->PSOR, SWD_CLK_MASK);
 
         //clear the interrupt flag
         FTM0_SC &= ~FTM_SC_TOF_MASK;
@@ -205,8 +214,11 @@ void FTM0_IRQHandler(void)
         if (state != SWD_BUS_IDLE)
         {
             //clock is now low
-            SWD_CLK_LOW;
+            MASK_SET(SWD_GPIO->PCOR, SWD_CLK_MASK);
         }
+
+        //do our bus things while the target isn't listening
+        swd_do_bus();
 
         //clear the interrupt flag
         FTM0_C0SC &= ~FTM_CnSC_CHF_MASK;
@@ -260,31 +272,31 @@ static void swd_do_bus(void)
     switch (state)
     {
     case SWD_BUS_IDLE:
-        SWD_DATA_IN; //let the data float high
+        SWD_DIO_IN; //let the data float high
         break;
     case SWD_BUS_INIT:
-        SWD_DATA_OUT;
+        SWD_DIO_OUT;
         t = 0x01 << (counter & 0x7); //this is the mask for the bit, transmitted LSB first
         if (swd_initseq[counter >> 3] & t)
         {
-            SWD_DATA_HIGH;
+            SWD_DIO_HIGH;
         }
         else
         {
-            SWD_DATA_LOW;
+            SWD_DIO_LOW;
         }
         counter++;
         break;
     case SWD_BUS_STOP:
-        SWD_DATA_OUT;
+        SWD_DIO_OUT;
         t = 0x01 << (counter & 0x7); //this is the mask for the bit, transmitted LSB first
         if (swd_stopseq[counter >> 3] & t)
         {
-            SWD_DATA_HIGH;
+            SWD_DIO_HIGH;
         }
         else
         {
-            SWD_DATA_LOW;
+            SWD_DIO_LOW;
         }
         counter++;
         break;
@@ -364,28 +376,28 @@ static uint8_t swd_handle_read(cmd_t* cmd)
     {
         //lsb first
         mask = 0x1 << cmd->state;
-        SWD_DATA_OUT;
+        SWD_DIO_OUT;
         if (cmd->request & mask)
         {
-            SWD_DATA_HIGH;
+            SWD_DIO_HIGH;
         }
         else
         {
-            SWD_DATA_LOW;
+            SWD_DIO_LOW;
         }
         cmd->state++;
     }
     else if (cmd->state < SWD_READ_STATE_TM0)
     {
         //turnaround
-        SWD_DATA_IN;
+        SWD_DIO_IN;
         cmd->state_data = 0; //prepare to read response
         cmd->state++;
     }
     else if (cmd->state < SWD_READ_STATE_RESP)
     {
         //lsb first
-        cmd->state_data |= SWD_DATA_VALUE << (cmd->state - SWD_READ_STATE_TM0);
+        cmd->state_data |= SWD_DIO_VALUE << (cmd->state - SWD_READ_STATE_TM0);
         if (cmd->state == 11)
         {
             //determine response
@@ -420,7 +432,7 @@ static uint8_t swd_handle_read(cmd_t* cmd)
     else if (cmd->state < SWD_READ_STATE_READ)
     {
         //lsb first
-        cmd->data |= SWD_DATA_VALUE << (cmd->state - SWD_READ_STATE_RESP);
+        cmd->data |= SWD_DIO_VALUE << (cmd->state - SWD_READ_STATE_RESP);
         cmd->state++;
     }
     else if (cmd->state < SWD_READ_STATE_PARITY)
@@ -432,7 +444,7 @@ static uint8_t swd_handle_read(cmd_t* cmd)
     else if (cmd->state < SWD_READ_STATE_TM1)
     {
         //turnaround
-        SWD_DATA_OUT;
+        SWD_DIO_OUT;
         cmd->result->result = SWD_OK;
         cmd->result->done = 1;
         //we are now done
@@ -458,34 +470,34 @@ static uint8_t swd_handle_write(cmd_t* cmd)
     {
         //lsb first
         mask = 0x1 << cmd->state;
-        SWD_DATA_OUT;
+        SWD_DIO_OUT;
         if (cmd->request & mask)
         {
-            SWD_DATA_HIGH;
+            SWD_DIO_HIGH;
         }
         else
         {
-            SWD_DATA_LOW;
+            SWD_DIO_LOW;
         }
         cmd->state++;
     }
     else if (cmd->state < SWD_WRITE_STATE_TM0)
     {
         //turnaround
-        SWD_DATA_IN;
+        SWD_DIO_IN;
         cmd->state_data = 0; //prepare to read response
         cmd->state++;
     }
     else if (cmd->state < SWD_WRITE_STATE_RESP)
     {
         //lsb first
-        cmd->state_data |= SWD_DATA_VALUE << (cmd->state - SWD_READ_STATE_TM0);
+        cmd->state_data |= SWD_DIO_VALUE << (cmd->state - SWD_READ_STATE_TM0);
         cmd->state++;
     }
     else if (cmd->state < SWD_WRITE_STATE_TM1)
     {
         //turnaround
-        SWD_DATA_OUT;
+        SWD_DIO_OUT;
         switch (cmd->state_data)
         {
         case SWD_RESP_OK:
@@ -515,11 +527,11 @@ static uint8_t swd_handle_write(cmd_t* cmd)
         mask = 1 << (cmd->state - SWD_WRITE_STATE_TM1);
         if (cmd->data & mask)
         {
-            SWD_DATA_HIGH;
+            SWD_DIO_HIGH;
         }
         else
         {
-            SWD_DATA_LOW;
+            SWD_DIO_LOW;
         }
         cmd->state++;
     }
@@ -533,11 +545,11 @@ static uint8_t swd_handle_write(cmd_t* cmd)
         temp &= 0xf;
         if ((0x6996 >> temp) & 1)
         {
-            SWD_DATA_HIGH;
+            SWD_DIO_HIGH;
         }
         else
         {
-            SWD_DATA_LOW;
+            SWD_DIO_LOW;
         }
         cmd->result->result = SWD_OK;
         cmd->result->done = 1;
