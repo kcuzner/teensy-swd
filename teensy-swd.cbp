@@ -45,8 +45,8 @@
 		<Unit filename="include/term_io.h" />
 		<Unit filename="include/uart.h" />
 		<Unit filename="include/usb.h" />
+		<Unit filename="include/usb_types.h" />
 		<Unit filename="include/wdog.h" />
-		<Unit filename="shared/usb_types.h" />
 		<Unit filename="src/main.c">
 			<Option compilerVar="CC" />
 		</Unit>
