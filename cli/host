@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+
+import sys, errno
+import usb.core, usb.util
+import dto
+
+class SWDAdapter(object):
+    """
+    Represents the swd adapter
+    """
+    ID_VENDOR=0x16c0
+    ID_PRODUCT=0x05dc
+    MANUFACTURER="kevincuzner.com"
+    PRODUCT="SWD Adapter"
+    @staticmethod
+    def get_device():
+        """
+        Finds the first connected ae-2015 device
+        """
+        devs = usb.core.find(idProduct=SWDAdapter.ID_PRODUCT,
+            idVendor=SWDAdapter.ID_VENDOR, find_all=True)
+        for dev in devs:
+            if dev.manufacturer == SWDAdapter.MANUFACTURER \
+                    and dev.product == SWDAdapter.PRODUCT:
+                dev.set_configuration()
+                return dev
+        return None
+    @staticmethod
+    def open():
+        """
+        Returns a new SWDAdapter object if one can be found to attach to
+        """
+        dev = SWDAdapter.get_device()
+        return None if dev is None else SWDAdapter(dev)
+    def reload(fn):
+        """
+        Decorates a method which should attempt to reload the device if it fails
+        with the ENODEV error
+        """
+        def wrapped(*args):
+            try:
+                return fn(*args)
+            except usb.core.USBError as err:
+                if err.errno == errno.ENODEV:
+                    dev = SWDAdapter.get_device()
+                    if dev is not None:
+                        args[0].__dev = dev
+                        return fn(*args) #rerun function without except
+                raise
+        return wrapped
+
+    def __init__(self, dev):
+        """
+        Creates a new adapter with a device
+        """
+        self.__dev = dev
+    @reload
+    def set_led(self, on=True):
+        self.__dev.ctrl_transfer(0x00, 0x10 if on else 0x11)
+
+def main():
+    dev = SWDAdapter.get_device()
+    if dev is None:
+        print("ERROR: No SWD Adapter device found", file=sys.stderr)
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
+    sys.exit(0)
