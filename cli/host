@@ -1,8 +1,19 @@
 #!/usr/bin/env python3
 
-import sys, errno
+import sys, errno, time
 import usb.core, usb.util
 import dto
+
+class Indexer(object):
+    def __init__(self, limit):
+        self.__i = 0
+        self.__limit = limit
+    def __call__(self):
+        i = self.__i
+        self.__i += 1
+        if self.__i > self.__limit:
+            self.__i = 0
+        return i
 
 class SWDAdapter(object):
     """
@@ -11,7 +22,7 @@ class SWDAdapter(object):
     ID_VENDOR=0x16c0
     ID_PRODUCT=0x05dc
     MANUFACTURER="kevincuzner.com"
-    PRODUCT="SWD Adapter"
+    PRODUCT="SWD Adaptor"
     @staticmethod
     def get_device():
         """
@@ -20,8 +31,7 @@ class SWDAdapter(object):
         devs = usb.core.find(idProduct=SWDAdapter.ID_PRODUCT,
             idVendor=SWDAdapter.ID_VENDOR, find_all=True)
         for dev in devs:
-            if dev.manufacturer == SWDAdapter.MANUFACTURER \
-                    and dev.product == SWDAdapter.PRODUCT:
+            if dev.manufacturer == SWDAdapter.MANUFACTURER and dev.product == SWDAdapter.PRODUCT:
                 dev.set_configuration()
                 return dev
         return None
@@ -37,15 +47,17 @@ class SWDAdapter(object):
         Decorates a method which should attempt to reload the device if it fails
         with the ENODEV error
         """
-        def wrapped(*args):
+        def wrapped(*args, **kwargs):
             try:
-                return fn(*args)
+                return fn(*args, **kwargs)
             except usb.core.USBError as err:
                 if err.errno == errno.ENODEV:
+                    print("Attempting to reconnect...")
                     dev = SWDAdapter.get_device()
                     if dev is not None:
                         args[0].__dev = dev
-                        return fn(*args) #rerun function without except
+                        print("Reconnected. Retrying command.")
+                        return fn(*args, **kwargs) #rerun function without except
                 raise
         return wrapped
 
@@ -54,15 +66,80 @@ class SWDAdapter(object):
         Creates a new adapter with a device
         """
         self.__dev = dev
+        self.__next_index = Indexer(255)
     @reload
     def set_led(self, on=True):
+        """
+        Sets the LED state
+        """
         self.__dev.ctrl_transfer(0x00, 0x10 if on else 0x11)
+    @reload
+    def get_result(self, index):
+        """
+        Reads the current status of a command
+        """
+        buf = self.__dev.ctrl_transfer(
+            0x80, 0x22, wIndex=index, data_or_wLength=64, timeout=1000)
+        return dto.CommandResult.read(buf)
+    @reload
+    def read_raw(self, addr, wait=False):
+        """
+        Executes a raw read command, optionally returning the result of the
+        command
+
+        If wait is True, the device will be polled for the specific result of
+        the command. Otherwise, this function immediately returns None
+        """
+        read_cmd = dto.ReadRequest(addr).write()
+        idx = self.__next_index()
+        self.__dev.ctrl_transfer(
+            0x00, 0x20, wIndex=idx, data_or_wLength=read_cmd,
+            timeout=50)
+        while wait:
+            res = self.get_result(idx)
+            if res.done:
+                return res
+            time.sleep(1)
+        return None
+    @reload
+    def write_raw(self, addr, data, wait=False):
+        """
+        Executes a raw write command, optionally returning the result of the
+        command
+
+        If wait is True, the device will be polled for the specific result of
+        the command. Otherwise, this function immediately returns None
+        """
+        write_cmd = dto.WriteRequest(addr, data).write()
+        idx = self.__next_index()
+        self.__dev.ctrl_transfer(
+            0x00, 0x21, wIndex=idx, data_or_wLength=write_cmd,
+            timeout=50)
+        while wait:
+            res = self.get_result(idx)
+            if res.done:
+                return res
+            time.sleep(1)
+        return None
 
 def main():
-    dev = SWDAdapter.get_device()
+    dev = SWDAdapter.open()
     if dev is None:
         print("ERROR: No SWD Adapter device found", file=sys.stderr)
         sys.exit(1)
+    while True:
+        line = input("> ").split(' ')
+        cmd = line[0]
+        if cmd == "exit":
+            sys.exit(0)
+        elif cmd == "led":
+            dev.set_led(True if line[1] == "on" else False)
+        elif cmd == "read":
+            print(dev.read_raw(line[1], wait=True))
+        elif cmd == "write":
+            print(dev.write_raw(line[1], line[2], wait=True))
+        else:
+            print("Unrecognized command", line)
 
 if __name__ == "__main__":
     main()

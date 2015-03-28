@@ -2,6 +2,5 @@
 <CodeBlocks_workspace_file>
 	<Workspace title="Workspace">
 		<Project filename="teensy-swd.cbp" />
-		<Project filename="host/host.cbp" />
 	</Workspace>
 </CodeBlocks_workspace_file>
