@@ -1,0 +1,12 @@
+Results from testing on 2015-03-28
+
+scope_0.png: Before correction for T_os
+
+scope_1.png: Corrected T_os to be 0nS
+
+scope_2.png: Rise times of data/clock. These are out of spec...datasheet says
+3nS maximum.
+
+scope_3.png: Serious noise when the data line is floating...sign that the target
+is not grabbing the line and therefore isn't able to pick our 0xa5 request
+
